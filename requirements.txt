@@ -4,6 +4,6 @@ numpy
 matplotlib
 seaborn
 scikit-learn
-tensorflow==2.12.0
-keras==2.12.0
+tensorflow==2.19.0rc2
+keras==3.2.1
 plotly
