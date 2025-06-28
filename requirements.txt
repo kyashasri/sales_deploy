@@ -1,9 +1,0 @@
-streamlit>=1.30
-pandas
-numpy
-matplotlib
-seaborn
-scikit-learn
-tensorflow==2.19.0rc2
-keras==3.2.1
-plotly
