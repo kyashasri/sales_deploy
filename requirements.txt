@@ -1,9 +1,9 @@
-Flask==2.3.3
-pandas==2.0.3
+txtstreamlit==1.28.1
+pandas==1.5.3
 numpy==1.24.3
+plotly==5.15.0
+seaborn==0.12.2
+matplotlib==3.7.1
 scikit-learn==1.3.0
 tensorflow==2.13.0
-matplotlib==3.7.2
-plotly==5.15.0
-Werkzeug==2.3.7
-gunicorn==21.2.0
+keras==2.13.1
