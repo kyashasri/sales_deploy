@@ -7,26 +7,12 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+from keras.models import Sequential
+from keras.layers import LSTM, Dense, Dropout
 from sklearn.model_selection import train_test_split
+from tensorflow.keras.callbacks import EarlyStopping
 import warnings
 warnings.filterwarnings('ignore')
-
-# Try to import TensorFlow/Keras with fallback
-try:
-    from keras.models import Sequential
-    from keras.layers import LSTM, Dense, Dropout
-    from tensorflow.keras.callbacks import EarlyStopping
-    TENSORFLOW_AVAILABLE = True
-except ImportError:
-    try:
-        import tensorflow as tf
-        from tensorflow.keras.models import Sequential
-        from tensorflow.keras.layers import LSTM, Dense, Dropout
-        from tensorflow.keras.callbacks import EarlyStopping
-        TENSORFLOW_AVAILABLE = True
-    except ImportError:
-        TENSORFLOW_AVAILABLE = False
-        st.warning("⚠️ TensorFlow is not available. LSTM forecasting will be disabled.")
 
 # Set page configuration
 st.set_page_config(
@@ -66,13 +52,10 @@ st.markdown('<div class="main-header">🍫 Chocolate Sales Analysis Dashboard</d
 
 # Sidebar
 st.sidebar.title("📊 Navigation")
-analysis_options = ["Overview", "Product Sales Distribution", "Country Analysis", "Time Series Analysis"]
-if TENSORFLOW_AVAILABLE:
-    analysis_options.append("LSTM Forecasting")
-else:
-    analysis_options.append("LSTM Forecasting (Disabled)")
-
-analysis_option = st.sidebar.selectbox("Choose Analysis", analysis_options)
+analysis_option = st.sidebar.selectbox(
+    "Choose Analysis",
+    ["Overview", "Product Sales Distribution", "Country Analysis", "Time Series Analysis", "LSTM Forecasting"]
+)
 
 # File upload
 uploaded_file = st.sidebar.file_uploader("Upload Chocolate Sales CSV", type="csv")
@@ -277,7 +260,7 @@ if uploaded_file is not None:
         st.session_state['interpolated_data'] = interpolated
     
     # LSTM Forecasting
-    elif analysis_option == "LSTM Forecasting" and TENSORFLOW_AVAILABLE:
+    elif analysis_option == "LSTM Forecasting":
         st.markdown('<div class="sub-header">🔮 LSTM Sales Forecasting</div>', unsafe_allow_html=True)
         
         if 'interpolated_data' not in st.session_state:
@@ -523,21 +506,6 @@ if uploaded_file is not None:
                 
                 status_text.text('Forecasting complete!')
                 progress_bar.empty()
-    
-    elif analysis_option == "LSTM Forecasting (Disabled)":
-        st.markdown('<div class="sub-header">🔮 LSTM Sales Forecasting</div>', unsafe_allow_html=True)
-        st.error("❌ LSTM Forecasting is disabled because TensorFlow is not available.")
-        st.info("To enable LSTM forecasting, ensure TensorFlow is properly installed.")
-        
-        # Show alternative forecasting methods
-        st.markdown("### Alternative Forecasting Methods")
-        st.markdown("""
-        While LSTM is unavailable, you can still perform forecasting using:
-        - **Linear Regression** with time-based features
-        - **Moving Averages** for trend analysis
-        - **Seasonal Decomposition** for pattern identification
-        - **ARIMA Models** (if statsmodels is available)
-        """)
 
 else:
     st.info("👆 Please upload a Chocolate Sales CSV file to begin analysis.")
@@ -553,4 +521,4 @@ else:
 
 # Footer
 st.markdown("---")
-st.markdown("**🍫 Chocolate Sales Analysis Dashboard** | Built with Streamlit")
+st.markdown("**🍫 Chocolate Sales Analysis Dashboard**")
