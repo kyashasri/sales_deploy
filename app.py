@@ -6,11 +6,6 @@ import plotly.graph_objects as go
 import seaborn as sns
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import MinMaxScaler
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
-from keras.models import Sequential
-from keras.layers import LSTM, Dense, Dropout
-from sklearn.model_selection import train_test_split
-from tensorflow.keras.callbacks import EarlyStopping
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -57,14 +52,12 @@ analysis_option = st.sidebar.selectbox(
     ["Overview", "Product Sales Distribution", "Country Analysis", "Time Series Analysis", "LSTM Forecasting"]
 )
 
-# File upload
-uploaded_file = st.sidebar.file_uploader("Upload Chocolate Sales CSV", type="csv")
-
-if uploaded_file is not None:
-    # Load and process data
-    @st.cache_data
-    def load_and_process_data(file):
-        df = pd.read_csv(file)
+# Load data from GitHub
+@st.cache_data
+def load_data():
+    try:
+        # Load main dataset
+        df = pd.read_csv("https://raw.githubusercontent.com/kyashasri/sales_deploy/main/Chocolate%20Sales.csv")
         
         # Data preprocessing
         df['Amount'] = df['Amount'].replace('[\$]', '', regex=True)
@@ -77,9 +70,32 @@ if uploaded_file is not None:
         df.set_index('Date', inplace=True)
         
         return df
-    
-    df = load_and_process_data(uploaded_file)
-    
+    except Exception as e:
+        st.error(f"Error loading data: {e}")
+        return None
+
+# Load precomputed LSTM results
+@st.cache_data
+def load_lstm_results():
+    try:
+        # Load forecast results
+        forecast_df = pd.read_csv("https://raw.githubusercontent.com/kyashasri/sales_deploy/main/forecast_next_4_weeks.csv")
+        
+        # Load evaluation per product
+        evaluation_df = pd.read_csv("https://raw.githubusercontent.com/kyashasri/sales_deploy/main/lstm_evaluation.csv")
+        
+        # Load overall metrics
+        metrics_df = pd.read_csv("https://raw.githubusercontent.com/kyashasri/sales_deploy/main/lstm_overall_metrics.csv")
+        
+        return forecast_df, evaluation_df, metrics_df
+    except Exception as e:
+        st.error(f"Error loading LSTM results: {e}")
+        return None, None, None
+
+# Load data
+df = load_data()
+
+if df is not None:
     # Overview Section
     if analysis_option == "Overview":
         st.markdown('<div class="sub-header">📈 Dataset Overview</div>', unsafe_allow_html=True)
@@ -123,12 +139,7 @@ if uploaded_file is not None:
         top_n = st.slider("Select number of top products to display", 3, 10, 5)
         
         top_products = total_sales_per_product.head(top_n)
-        others = total_sales_per_product.iloc[top_n:]
-        others_sum = others['Amount'].sum()
         
-        if others_sum > 0:
-            others_df = pd.DataFrame([{'Product': 'Others', 'Amount': others_sum}])
-            top_products = pd.concat([top_products, others_df], ignore_index=True)
         
         # Create pie chart
         fig_pie = px.pie(
@@ -136,13 +147,13 @@ if uploaded_file is not None:
             names='Product',
             values='Amount',
             hole=0.4,
-            title=f'Sales Distribution: Top {top_n} Products and Others'
+            title=f'Sales Distribution: Top {top_n} Products'
         )
         
         fig_pie.update_traces(textinfo='percent+label')
         fig_pie.update_layout(
             title={
-                'text': f'<b>Sales Distribution: Top {top_n} Products and Others</b>',
+                'text': f'<b>Sales Distribution: Top {top_n} Products</b>',
                 'x': 0.5,
                 'xanchor': 'center',
                 'font': {'size': 20}
@@ -256,268 +267,130 @@ if uploaded_file is not None:
             fig_ts.update_layout(height=600)
             st.plotly_chart(fig_ts, use_container_width=True)
         
-        # Store processed data in session state for forecasting
+        # Store processed data in session state for reference
         st.session_state['interpolated_data'] = interpolated
     
-    # LSTM Forecasting
+    # LSTM Forecasting (Updated with precomputed results)
     elif analysis_option == "LSTM Forecasting":
         st.markdown('<div class="sub-header">🔮 LSTM Sales Forecasting</div>', unsafe_allow_html=True)
         
-        if 'interpolated_data' not in st.session_state:
-            st.warning("Please visit the 'Time Series Analysis' section first to prepare the data.")
-            st.stop()
+        # Load precomputed LSTM results
+        forecast_df, evaluation_df, metrics_df = load_lstm_results()
         
-        interpolated = st.session_state['interpolated_data']
-        
-        # Forecasting parameters
-        col1, col2 = st.columns(2)
-        with col1:
-            seq_length = st.slider("Sequence Length (weeks)", 2, 8, 4)
-        with col2:
-            forecast_horizon = st.slider("Forecast Horizon (weeks)", 1, 8, 4)
-        
-        # Function definitions
-        def create_sequence(data, seq_length):
-            X, y = [], []
-            for i in range(len(data) - seq_length):
-                X.append(data[i:i + seq_length])
-                y.append(data[i + seq_length])
-            return np.array(X), np.array(y)
-        
-        def mean_absolute_percentage_error(y_true, y_pred):
-            y_true, y_pred = np.array(y_true), np.array(y_pred)
-            epsilon = 1e-10
-            return np.mean(np.abs((y_true - y_pred) / (y_true + epsilon))) * 100
-        
-        if st.button("🚀 Run LSTM Forecasting"):
-            with st.spinner("Training LSTM models and generating forecasts..."):
-                # Model evaluation setup
-                product_names = []
-                actual_dict = {}
-                predicted_dict = []
-                best_epochs = []
-                
-                products = interpolated['Product'].unique()
-                
-                # Progress bar
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-                
-                # Training loop
-                for idx, product in enumerate(products):
-                    status_text.text(f'Training model for {product}...')
-                    
-                    product_df = interpolated[interpolated['Product'] == product].sort_values(by='Date')
-                    product_df.set_index('Date', inplace=True)
-                    
-                    if len(product_df) < seq_length + 3:
-                        continue
-                    
-                    # Normalize Amount
-                    scaler = MinMaxScaler()
-                    scaled_data = scaler.fit_transform(product_df[['Amount']])
-                    
-                    # Create sequences
-                    X, y = create_sequence(scaled_data, seq_length)
-                    if len(X) == 0:
-                        continue
-                    
-                    # Train-test split
-                    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42, shuffle=False)
-                    
-                    # LSTM Model
-                    model = Sequential()
-                    model.add(LSTM(128, return_sequences=True, input_shape=(X_train.shape[1], X_train.shape[2])))
-                    model.add(Dropout(0.1))
-                    model.add(LSTM(90))
-                    model.add(Dense(1))
-                    
-                    model.compile(optimizer='adam', loss='mean_squared_error')
-                    early_stop = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
-                    
-                    history = model.fit(X_train, y_train, epochs=50, batch_size=8, verbose=0,
-                                       validation_data=(X_test, y_test), callbacks=[early_stop])
-                    
-                    # Record best epoch
-                    best_epoch = np.argmin(history.history['val_loss']) + 1
-                    best_epochs.append(best_epoch)
-                    
-                    # Predict and evaluate
-                    pred_scaled = model.predict(X_test, verbose=0)
-                    predicted_amounts = scaler.inverse_transform(pred_scaled).flatten()
-                    actual_amounts = scaler.inverse_transform(y_test.reshape(-1, 1)).flatten()
-                    
-                    # Store results
-                    product_names.append(product)
-                    actual_dict[product] = np.mean(actual_amounts)
-                    predicted_dict.append(np.mean(predicted_amounts))
-                    
-                    # Update progress
-                    progress_bar.progress((idx + 1) / len(products))
-                
-                status_text.text('Generating forecasts...')
-                
-                # Generate forecasts
-                forecast_data = []
-                for product in products:
-                    product_df = interpolated[interpolated['Product'] == product].sort_values('Date')
-                    product_df.set_index('Date', inplace=True)
-                    
-                    if len(product_df) < seq_length + forecast_horizon:
-                        continue
-                    
-                    # Scale Amount
-                    scaler = MinMaxScaler()
-                    scaled_data = scaler.fit_transform(product_df[['Amount']])
-                    
-                    # Create sequences for training
-                    X, y = [], []
-                    for i in range(len(scaled_data) - seq_length):
-                        X.append(scaled_data[i:i+seq_length])
-                        y.append(scaled_data[i+seq_length])
-                    X, y = np.array(X), np.array(y)
-                    
-                    # LSTM model
-                    model = Sequential()
-                    model.add(LSTM(128, return_sequences=True, input_shape=(seq_length, 1)))
-                    model.add(Dropout(0.1))
-                    model.add(LSTM(90))
-                    model.add(Dense(1))
-                    model.compile(optimizer='adam', loss='mean_squared_error')
-                    model.fit(X, y, epochs=50, batch_size=8, verbose=0)
-                    
-                    # Start forecasting recursively
-                    input_seq = scaled_data[-seq_length:].reshape(1, seq_length, 1)
-                    preds = []
-                    for _ in range(forecast_horizon):
-                        pred_scaled = model.predict(input_seq, verbose=0)
-                        pred_value = scaler.inverse_transform(pred_scaled)[0, 0]
-                        preds.append(pred_value)
-                        
-                        # Update input_seq for next prediction
-                        next_input = pred_scaled.reshape(1, 1, 1)
-                        input_seq = np.concatenate((input_seq[:, 1:, :], next_input), axis=1)
-                    
-                    forecast_data.append([product] + preds)
-                
-                # Create results DataFrame
-                results_df = pd.DataFrame({
-                    'Product': product_names,
-                    'Actual Weekly Avg': [actual_dict[p] for p in product_names],
-                    'Predicted Weekly Avg': [float(p) for p in predicted_dict],
-                    'Best Epoch': best_epochs
-                }).round(1)
-                
-                # Display results
-                st.success("✅ LSTM Forecasting completed!")
-                
-                # Model Performance
-                st.markdown("### Model Performance")
-                
-                # Calculate metrics
-                actual_means = results_df['Actual Weekly Avg'].values
-                predicted_means = results_df['Predicted Weekly Avg'].values
-                
-                epsilon = 1e-10
-                mape_avg = np.mean(np.abs((actual_means - predicted_means) / (actual_means + epsilon))) * 100
-                mae_avg = mean_absolute_error(actual_means, predicted_means)
-                rmse_avg = np.sqrt(mean_squared_error(actual_means, predicted_means))
-                r2_avg = r2_score(actual_means, predicted_means)
-                
-                col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    st.metric("MAPE", f"{mape_avg:.1f}%")
-                with col2:
-                    st.metric("MAE", f"{mae_avg:.1f}")
-                with col3:
-                    st.metric("RMSE", f"{rmse_avg:.1f}")
-                with col4:
-                    st.metric("R² Score", f"{r2_avg:.3f}")
-                
-                # Actual vs Predicted comparison
-                st.markdown("### Actual vs Predicted Weekly Averages")
-                fig_comparison = go.Figure()
-                
-                x_pos = np.arange(len(product_names))
-                fig_comparison.add_trace(go.Bar(
-                    x=product_names,
-                    y=actual_means,
-                    name='Actual',
-                    marker_color='lightblue'
+        if forecast_df is not None and evaluation_df is not None and metrics_df is not None:
+            st.success("✅ LSTM Forecasting Results")
+            
+            # Display overall metrics
+            st.markdown("### Model Performance")
+            
+            # Extract metrics from the CSV
+            mape = metrics_df['MAPE'].iloc[0]
+            mae = metrics_df['MAE'].iloc[0]
+            rmse = metrics_df['RMSE'].iloc[0]
+            r2 = metrics_df['R2 Score'].iloc[0]
+            
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("MAPE", f"{mape:.1f}%")
+            with col2:
+                st.metric("MAE", f"{mae:.1f}")
+            with col3:
+                st.metric("RMSE", f"{rmse:.1f}","(9.5%)")
+            with col4:
+                st.metric("R2 Score", f"{r2:.3f}")
+            
+            # Actual vs Predicted comparison
+            st.markdown("### Actual vs Predicted Weekly Averages")
+            fig_comparison = go.Figure()
+            
+            product_names = evaluation_df['Product'].values
+            actual_means = evaluation_df['Actual Weekly Avg'].values
+            predicted_means = evaluation_df['Predicted Weekly Avg'].values
+            
+            fig_comparison.add_trace(go.Bar(
+                x=product_names,
+                y=actual_means,
+                name='Actual',
+                marker_color='lightblue'
+            ))
+            fig_comparison.add_trace(go.Bar(
+                x=product_names,
+                y=predicted_means,
+                name='Predicted',
+                marker_color='orange'
+            ))
+            
+            fig_comparison.update_layout(
+                title='Actual vs Predicted Weekly Amount (All Products)',
+                xaxis_title='Product',
+                yaxis_title='Weekly Amount',
+                barmode='group',
+                height=600,
+                xaxis_tickangle=-45
+            )
+            
+            st.plotly_chart(fig_comparison, use_container_width=True)
+            
+            # Display evaluation table
+            st.markdown("### Model Evaluation by Product")
+            st.dataframe(evaluation_df)
+            
+            # Forecast visualization
+            st.markdown("### 4-Week Forecast Results")
+            st.dataframe(forecast_df)
+            
+            # Interactive forecast chart
+            st.markdown("### Interactive Forecast Visualization")
+            
+            fig_forecast = go.Figure()
+            
+            week_columns = [col for col in forecast_df.columns if col.startswith('Week+')]
+            
+            for index, row in forecast_df.iterrows():
+                product = row['Product']
+                values = row[week_columns].values.astype(float)
+                fig_forecast.add_trace(go.Bar(
+                    x=week_columns,
+                    y=values,
+                    name=product
                 ))
-                fig_comparison.add_trace(go.Bar(
-                    x=product_names,
-                    y=predicted_means,
-                    name='Predicted',
-                    marker_color='orange'
-                ))
+            
+            fig_forecast.update_layout(
+                title='📦 4-Week Forecast for All Products',
+                xaxis_title='Week',
+                yaxis_title='Forecasted Amount',
+                barmode='group',
+                height=600,
+                showlegend=True
+            )
+            
+            st.plotly_chart(fig_forecast, use_container_width=True)
+            
+            # Download forecast
+            csv = forecast_df.to_csv(index=False)
+            st.download_button(
+                label="📥 Download Forecast CSV",
+                data=csv,
+                file_name='forecast_results.csv',
+                mime='text/csv'
+            )
+            
+            # Additional insights
+            st.markdown("### Forecast Insights")
+            total_forecast = forecast_df[week_columns].sum().sum()
+            avg_weekly_forecast = forecast_df[week_columns].mean().mean()
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("Total 4-Week Forecast", f"${total_forecast:,.2f}")
+            with col2:
+                st.metric("Average Weekly Forecast", f"${avg_weekly_forecast:,.2f}")
                 
-                fig_comparison.update_layout(
-                    title='Actual vs Predicted Weekly Amount (All Products)',
-                    xaxis_title='Product',
-                    yaxis_title='Weekly Amount',
-                    barmode='group',
-                    height=600
-                )
-                
-                st.plotly_chart(fig_comparison, use_container_width=True)
-                
-                # Forecast visualization
-                if forecast_data:
-                    week_columns = [f'Week+{i+1}' for i in range(forecast_horizon)]
-                    forecast_df = pd.DataFrame(forecast_data, columns=['Product'] + week_columns)
-                    
-                    st.markdown("### Forecast Results")
-                    st.dataframe(forecast_df)
-                    
-                    # Interactive forecast chart
-                    st.markdown("### Interactive Forecast Visualization")
-                    
-                    fig_forecast = go.Figure()
-                    
-                    for index, row in forecast_df.iterrows():
-                        product = row['Product']
-                        values = row[week_columns].values.astype(float)
-                        fig_forecast.add_trace(go.Bar(
-                            x=week_columns,
-                            y=values,
-                            name=product
-                        ))
-                    
-                    fig_forecast.update_layout(
-                        title=f'📦 {forecast_horizon}-Week Forecast for All Products',
-                        xaxis_title='Week',
-                        yaxis_title='Forecasted Amount',
-                        barmode='group',
-                        height=600,
-                        showlegend=True
-                    )
-                    
-                    st.plotly_chart(fig_forecast, use_container_width=True)
-                    
-                    # Download forecast
-                    csv = forecast_df.to_csv(index=False)
-                    st.download_button(
-                        label="📥 Download Forecast CSV",
-                        data=csv,
-                        file_name='forecast_results.csv',
-                        mime='text/csv'
-                    )
-                
-                status_text.text('Forecasting complete!')
-                progress_bar.empty()
+        else:
+            st.error("Failed to load LSTM results. Please check the GitHub URLs.")
 
 else:
-    st.info("👆 Please upload a Chocolate Sales CSV file to begin analysis.")
-    st.markdown("""
-    ### Expected CSV Format:
-    - **Date**: Sales date
-    - **Product**: Product name
-    - **Amount**: Sales amount (can include $ and commas)
-    - **Country**: Country of sale
-    - **Sales Person**: Salesperson name
-    - **Boxes Shipped**: Number of boxes shipped
-    """)
+    st.error("Failed to load the main dataset. Please check the GitHub URL.")
 
 # Footer
 st.markdown("---")
